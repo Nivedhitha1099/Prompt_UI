@@ -8,3 +8,4 @@ python-docx
 bs4
 markdown
 langchain-anthropic
+langchain
