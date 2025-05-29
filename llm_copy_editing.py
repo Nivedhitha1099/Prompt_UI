@@ -11,6 +11,13 @@ import re
 from langchain_anthropic import ChatAnthropic
 from langchain.schema import HumanMessage
 from dotenv import load_dotenv
+from docx import Document
+from docx.shared import RGBColor
+from docx.oxml.ns import qn
+from docx.oxml.ns import qn
+from docx.oxml import OxmlElement
+from docx.enum.text import WD_COLOR_INDEX
+
 
 # Load environment variables
 load_dotenv()
@@ -213,6 +220,26 @@ def highlight_differences(original, edited):
             highlighted_edited.append(f'<span style="background-color: #ccffcc; font-weight: bold;">{edited_chunk}</span>')
     
     return ''.join(highlighted_original), ''.join(highlighted_edited)
+def format_diff_to_docx(original, edited, output_path):
+    doc = Document()
+    doc.add_heading("Tracked Changes", level=1)
+
+    diff = difflib.ndiff(original.split(), edited.split())
+
+    p = doc.add_paragraph()
+    for word in diff:
+        if word.startswith('- '):
+            run = p.add_run(word[2:] + ' ')
+            run.font.color.rgb = RGBColor(0xFF, 0x00, 0x00)
+            run.font.strike = True
+        elif word.startswith('+ '):
+            run = p.add_run(word[2:] + ' ')
+            run.font.color.rgb = RGBColor(0x00, 0x80, 0x00)
+            run.font.underline = True
+        elif word.startswith('  '):
+            p.add_run(word[2:] + ' ')
+
+    doc.save(output_path)
 
 def create_side_by_side_diff(original, edited):
     """Create a side-by-side comparison with highlighting"""
@@ -276,6 +303,30 @@ def create_diff_view(original, edited):
         n=3
     ))
     return ''.join(diff)
+
+def format_diff_to_docx(original, edited, output_path):
+    from docx import Document
+    from docx.shared import RGBColor
+
+    doc = Document()
+    doc.add_heading("Tracked Changes", level=1)
+
+    diff = difflib.ndiff(original.split(), edited.split())
+
+    p = doc.add_paragraph()
+    for word in diff:
+        if word.startswith('- '):
+            run = p.add_run(word[2:] + ' ')
+            run.font.color.rgb = RGBColor(0xFF, 0x00, 0x00)
+            run.font.strike = True
+        elif word.startswith('+ '):
+            run = p.add_run(word[2:] + ' ')
+            run.font.color.rgb = RGBColor(0x00, 0x80, 0x00)
+            run.font.underline = True
+        elif word.startswith('  '):
+            p.add_run(word[2:] + ' ')
+
+    doc.save(output_path)
 
 def main():
     st.title("📝 Document Copyediting Tool")
@@ -431,12 +482,25 @@ def main():
                         st.session_state.original_text_result, 
                         st.session_state.edited_text_result
                     )
-                    st.download_button(
-                        label="📊 Download Diff Report",
-                        data=diff_content,
-                        file_name=f"diff_{uploaded_file.name if uploaded_file else 'document'}.txt",
-                        mime="text/plain"
-                    )
+            st.download_button(
+                label="📊 Download Diff Report",
+                data=diff_content,
+                file_name=f"diff_{uploaded_file.name if uploaded_file else 'document'}.txt",
+                mime="text/plain"
+            )
+            
+            # New download button for docx with tracked changes
+            if hasattr(st.session_state, 'original_text_result') and hasattr(st.session_state, 'edited_text_result'):
+                # Generate docx in memory
+                docx_buffer = io.BytesIO()
+                format_diff_to_docx(st.session_state.original_text_result, st.session_state.edited_text_result, docx_buffer)
+                docx_buffer.seek(0)
+                st.download_button(
+                    label="📄 Download Edited Document (DOCX with tracked changes)",
+                    data=docx_buffer.getvalue(),
+                    file_name=f"edited_tracked_changes_{uploaded_file.name if uploaded_file else 'document'}.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                )
         else:
             st.info("👆 Upload a document and click 'Apply Copyediting Rules' to see the edited version here.")
     
