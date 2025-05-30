@@ -357,14 +357,11 @@ def main():
     st.sidebar.header("✏️ Custom Instructions")
     st.sidebar.markdown("Add any additional editing instructions:")
     
-    custom_prompt = st.sidebar.text_area(
-        "Additional Instructions",
-        placeholder="e.g., 'Make the tone more formal', 'Convert to active voice', 'Simplify complex sentences', etc.",
-        height=120,
-        key="custom_prompt",
-        help="Enter any specific instructions for editing that aren't covered by the standard rules above."
-    )
-    
+    # Initialize custom_prompt in session state if not already present
+    # This ensures st.session_state.custom_prompt always exists when the text_area is created
+    if "custom_prompt" not in st.session_state:
+        st.session_state.custom_prompt = ""
+
     # Add some example prompts
     st.sidebar.markdown("**Example Instructions:**")
     example_prompts = [
@@ -379,9 +376,20 @@ def main():
     for i, example in enumerate(example_prompts):
         if st.sidebar.button(f"Use: {example[:30]}...", key=f"example_{i}"):
             st.session_state.custom_prompt = example
-            st.rerun()
+            # st.experimental_rerun() is essential here to make the text_area update
+            st.rerun() 
+            
+    # Define the text_area.
+    # IMPORTANT: DO NOT provide the 'value' parameter if you are using 'key' and managing via session_state
+    custom_prompt = st.sidebar.text_area(
+        "Additional Instructions",
+        placeholder="e.g., 'Make the tone more formal', 'Convert to active voice', 'Simplify complex sentences', etc.",
+        height=120,
+        key="custom_prompt", # Streamlit will automatically get/set its value from/to st.session_state.custom_prompt
+        help="Enter any specific instructions for editing that aren't covered by the standard rules above."
+    )
     
-    # Main content area
+    # The rest of your main function remains the same
     col1, col2 = st.columns([1, 1])
     
     with col1:
@@ -396,7 +404,6 @@ def main():
             # Display file info
             st.success(f"✅ File uploaded: {uploaded_file.name}")
             st.info(f"File size: {len(uploaded_file.getvalue())} bytes")
-            
             # Process document
             with st.spinner("Processing document..."):
                 original_text = process_document(uploaded_file)
@@ -428,7 +435,8 @@ def main():
                     st.write("*No style guide rules selected*")
                 
                 # Show custom instructions
-                if custom_prompt.strip():
+                # Now custom_prompt refers to the value from the text_area widget itself
+                if custom_prompt.strip(): 
                     st.write("**Custom Instructions:**")
                     st.write(f"• {custom_prompt}")
                 else:
