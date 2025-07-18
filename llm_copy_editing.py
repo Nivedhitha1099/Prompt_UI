@@ -12,11 +12,11 @@ from langchain_anthropic import ChatAnthropic
 from langchain.schema import HumanMessage
 from dotenv import load_dotenv
 from docx import Document
-from docx.shared import RGBColor
-from docx.oxml.ns import qn
+from docx.shared import RGBColor, Pt
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 from docx.enum.text import WD_COLOR_INDEX
+from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
 
 
 # Load environment variables
@@ -220,26 +220,210 @@ def highlight_differences(original, edited):
             highlighted_edited.append(f'<span style="background-color: #ccffcc; font-weight: bold;">{edited_chunk}</span>')
     
     return ''.join(highlighted_original), ''.join(highlighted_edited)
-def format_diff_to_docx(original, edited, output_path):
+
+def format_diff_to_docx(original_docx_file_obj, edited_text, output_path):
+    """
+    Creates a DOCX document with tracked changes.
+    Red strikethrough for deletions, green underline for insertions.
+    Attempts to preserve original formatting for equal and deleted text.
+    For inserted text, it tries to inherit paragraph and run formatting from nearby original content.
+    """
+    from docx import Document
+    from docx.shared import RGBColor, Pt
+    from docx.oxml.ns import qn
+    from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
+
+    # Load the original document from the file object
+    # Ensure the file object's pointer is at the beginning
+    original_docx_file_obj.seek(0) 
+    original_doc = Document(original_docx_file_obj)
     doc = Document()
+
     doc.add_heading("Tracked Changes", level=1)
 
-    diff = difflib.ndiff(original.split(), edited.split())
+    original_paragraphs = [p.text for p in original_doc.paragraphs]
+    edited_paragraphs = edited_text.split('\n')
 
-    p = doc.add_paragraph()
-    for word in diff:
-        if word.startswith('- '):
-            run = p.add_run(word[2:] + ' ')
-            run.font.color.rgb = RGBColor(0xFF, 0x00, 0x00)
-            run.font.strike = True
-        elif word.startswith('+ '):
-            run = p.add_run(word[2:] + ' ')
-            run.font.color.rgb = RGBColor(0x00, 0x80, 0x00)
-            run.font.underline = True
-        elif word.startswith('  '):
-            p.add_run(word[2:] + ' ')
+    differ = difflib.SequenceMatcher(None, original_paragraphs, edited_paragraphs)
 
+    for tag, i1, i2, j1, j2 in differ.get_opcodes():
+        if tag == 'equal':
+            # Copy paragraphs from original document preserving styles
+            for idx in range(i1, i2):
+                orig_p = original_doc.paragraphs[idx]
+                new_p = doc.add_paragraph()
+                # Copy paragraph formatting
+                new_p.style = orig_p.style
+                new_p.alignment = orig_p.alignment
+                new_p.paragraph_format.left_indent = orig_p.paragraph_format.left_indent
+                new_p.paragraph_format.right_indent = orig_p.paragraph_format.right_indent
+                new_p.paragraph_format.space_before = orig_p.paragraph_format.space_before
+                new_p.paragraph_format.space_after = orig_p.paragraph_format.space_after
+                new_p.paragraph_format.line_spacing = orig_p.paragraph_format.line_spacing
+
+                # Copy runs with formatting
+                for run in orig_p.runs:
+                    new_run = new_p.add_run(run.text)
+                    new_run.bold = run.bold
+                    new_run.italic = run.italic
+                    new_run.underline = run.underline
+                    if run.font.color.rgb is not None:
+                        new_run.font.color.rgb = run.font.color.rgb
+                    if run.font.size is not None:
+                        new_run.font.size = run.font.size
+                    if run.font.name is not None:
+                        new_run.font.name = run.font.name
+
+        elif tag == 'delete':
+            # Show deleted paragraphs with red strikethrough preserving styles
+            for idx in range(i1, i2):
+                orig_p = original_doc.paragraphs[idx]
+                new_p = doc.add_paragraph()
+                # Copy paragraph formatting
+                new_p.style = orig_p.style
+                new_p.alignment = orig_p.alignment
+                new_p.paragraph_format.left_indent = orig_p.paragraph_format.left_indent
+                new_p.paragraph_format.right_indent = orig_p.paragraph_format.right_indent
+                new_p.paragraph_format.space_before = orig_p.paragraph_format.space_before
+                new_p.paragraph_format.space_after = orig_p.paragraph_format.space_after
+                new_p.paragraph_format.line_spacing = orig_p.paragraph_format.line_spacing
+
+                for run in orig_p.runs:
+                    new_run = new_p.add_run(run.text)
+                    new_run.bold = run.bold
+                    new_run.italic = run.italic
+                    new_run.underline = run.underline
+                    new_run.font.color.rgb = RGBColor(0xFF, 0x00, 0x00)  # Red color
+                    new_run.font.strike = True
+                    if run.font.size is not None:
+                        new_run.font.size = run.font.size
+                    if run.font.name is not None:
+                        new_run.font.name = run.font.name
+
+        elif tag == 'insert':
+            # Show inserted paragraphs with green underline, attempting to inherit formatting
+            for para_text in edited_paragraphs[j1:j2]:
+                new_p = doc.add_paragraph()
+                
+                # Determine a reference paragraph to inherit style from
+                reference_p = None
+                if i1 > 0 and i1 - 1 < len(original_doc.paragraphs):
+                    reference_p = original_doc.paragraphs[i1 - 1] # Previous original paragraph
+                elif i2 < len(original_doc.paragraphs):
+                    reference_p = original_doc.paragraphs[i2] # Next original paragraph (if no previous)
+                
+                if reference_p:
+                    # Inherit paragraph-level formatting
+                    new_p.style = reference_p.style
+                    new_p.alignment = reference_p.alignment
+                    new_p.paragraph_format.left_indent = reference_p.paragraph_format.left_indent
+                    new_p.paragraph_format.right_indent = reference_p.paragraph_format.right_indent
+                    new_p.paragraph_format.space_before = reference_p.paragraph_format.space_before
+                    new_p.paragraph_format.space_after = reference_p.paragraph_format.space_after
+                    new_p.paragraph_format.line_spacing = reference_p.paragraph_format.line_spacing
+                    
+                    # Inherit run-level formatting from the first run of the reference paragraph
+                    # This is a heuristic, as the AI's plain text doesn't tell us internal formatting.
+                    if reference_p.runs:
+                        ref_run = reference_p.runs[0] # Take first run as reference for font properties
+                        new_run = new_p.add_run(para_text)
+                        new_run.bold = ref_run.bold
+                        new_run.italic = ref_run.italic
+                        # Set default underline (green for inserted)
+                        new_run.font.underline = True 
+                        new_run.font.color.rgb = RGBColor(0x00, 0x80, 0x00)  # Green color
+
+                        if ref_run.font.size is not None:
+                            new_run.font.size = ref_run.font.size
+                        if ref_run.font.name is not None:
+                            new_run.font.name = ref_run.font.name
+                    else: # Reference paragraph has no runs, or no suitable runs
+                        new_run = new_p.add_run(para_text)
+                        new_run.font.color.rgb = RGBColor(0x00, 0x80, 0x00)
+                        new_run.font.underline = True
+                        new_run.font.size = Pt(12) # Default
+                        new_run.font.name = 'Calibri' # Default
+                else: # No suitable reference paragraph found
+                    new_run = new_p.add_run(para_text)
+                    new_run.font.color.rgb = RGBColor(0x00, 0x80, 0x00)
+                    new_run.font.underline = True
+                    new_run.font.size = Pt(12)
+                    new_run.font.name = 'Calibri'
+
+        elif tag == 'replace':
+            # Show deleted paragraphs in red strikethrough preserving styles
+            for idx in range(i1, i2):
+                orig_p = original_doc.paragraphs[idx]
+                new_p = doc.add_paragraph()
+                # Copy paragraph formatting
+                new_p.style = orig_p.style
+                new_p.alignment = orig_p.alignment
+                new_p.paragraph_format.left_indent = orig_p.paragraph_format.left_indent
+                new_p.paragraph_format.right_indent = orig_p.paragraph_format.right_indent
+                new_p.paragraph_format.space_before = orig_p.paragraph_format.space_before
+                new_p.paragraph_format.space_after = orig_p.paragraph_format.space_after
+                new_p.paragraph_format.line_spacing = orig_p.paragraph_format.line_spacing
+
+                for run in orig_p.runs:
+                    new_run = new_p.add_run(run.text)
+                    new_run.bold = run.bold
+                    new_run.italic = run.italic
+                    new_run.underline = run.underline
+                    new_run.font.color.rgb = RGBColor(0xFF, 0x00, 0x00)  # Red color
+                    new_run.font.strike = True
+                    if run.font.size is not None:
+                        new_run.font.size = run.font.size
+                    if run.font.name is not None:
+                        new_run.font.name = run.font.name
+            
+            # Show inserted paragraphs with green underline, attempting to inherit formatting
+            for para_text in edited_paragraphs[j1:j2]:
+                new_p = doc.add_paragraph()
+                
+                # Determine a reference paragraph to inherit style from
+                reference_p = None
+                if i1 > 0 and i1 - 1 < len(original_doc.paragraphs):
+                    reference_p = original_doc.paragraphs[i1 - 1] # Previous original paragraph
+                elif i2 < len(original_doc.paragraphs):
+                    reference_p = original_doc.paragraphs[i2] # Next original paragraph (if no previous)
+                
+                if reference_p:
+                    # Inherit paragraph-level formatting
+                    new_p.style = reference_p.style
+                    new_p.alignment = reference_p.alignment
+                    new_p.paragraph_format.left_indent = reference_p.paragraph_format.left_indent
+                    new_p.paragraph_format.right_indent = reference_p.paragraph_format.right_indent
+                    new_p.paragraph_format.space_before = reference_p.paragraph_format.space_before
+                    new_p.paragraph_format.space_after = reference_p.paragraph_format.space_after
+                    new_p.paragraph_format.line_spacing = reference_p.paragraph_format.line_spacing
+
+                    if reference_p.runs:
+                        ref_run = reference_p.runs[0] # Take first run as reference
+                        new_run = new_p.add_run(para_text)
+                        new_run.bold = ref_run.bold
+                        new_run.italic = ref_run.italic
+                        new_run.font.underline = True 
+                        new_run.font.color.rgb = RGBColor(0x00, 0x80, 0x00)  # Green color
+
+                        if ref_run.font.size is not None:
+                            new_run.font.size = ref_run.font.size
+                        if ref_run.font.name is not None:
+                            new_run.font.name = ref_run.font.name
+                    else:
+                        new_run = new_p.add_run(para_text)
+                        new_run.font.color.rgb = RGBColor(0x00, 0x80, 0x00)
+                        new_run.font.underline = True
+                        new_run.font.size = Pt(12)
+                        new_run.font.name = 'Calibri'
+                else:
+                    new_run = new_p.add_run(para_text)
+                    new_run.font.color.rgb = RGBColor(0x00, 0x80, 0x00)
+                    new_run.font.underline = True
+                    new_run.font.size = Pt(12)
+                    new_run.font.name = 'Calibri'
+                    
     doc.save(output_path)
+
 
 def create_side_by_side_diff(original, edited):
     """Create a side-by-side comparison with highlighting"""
@@ -284,12 +468,35 @@ def create_side_by_side_diff(original, edited):
     
     return ''.join(diff_html)
 
+def chunk_text(text, max_chunk_size=3000):
+    """Split text into chunks of max_chunk_size characters without breaking words."""
+    words = text.split()
+    chunks = []
+    current_chunk = []
+    current_length = 0
+    for word in words:
+        if current_length + len(word) + 1 > max_chunk_size:
+            chunks.append(' '.join(current_chunk))
+            current_chunk = [word]
+            current_length = len(word) + 1
+        else:
+            current_chunk.append(word)
+            current_length += len(word) + 1
+    if current_chunk:
+        chunks.append(' '.join(current_chunk))
+    return chunks
+
 def get_edited_text(chat_model, text, selected_rules, custom_instructions=""):
-    """Get edited text from AI model"""
+    """Get edited text from AI model with chunking to avoid truncation"""
     try:
-        prompt = create_editing_prompt(text, selected_rules, custom_instructions)
-        response = chat_model.invoke([HumanMessage(content=prompt)])
-        return response.content
+        chunks = chunk_text(text)
+        edited_chunks = []
+        for chunk in chunks:
+            prompt = create_editing_prompt(chunk, selected_rules, custom_instructions)
+            response = chat_model.invoke([HumanMessage(content=prompt)])
+            edited_chunks.append(response.content)
+        # Combine all edited chunks
+        return '\n'.join(edited_chunks)
     except Exception as e:
         raise Exception(f"Error processing text with AI model: {str(e)}")
 
@@ -303,30 +510,6 @@ def create_diff_view(original, edited):
         n=3
     ))
     return ''.join(diff)
-
-def format_diff_to_docx(original, edited, output_path):
-    from docx import Document
-    from docx.shared import RGBColor
-
-    doc = Document()
-    doc.add_heading("Tracked Changes", level=1)
-
-    diff = difflib.ndiff(original.split(), edited.split())
-
-    p = doc.add_paragraph()
-    for word in diff:
-        if word.startswith('- '):
-            run = p.add_run(word[2:] + ' ')
-            run.font.color.rgb = RGBColor(0xFF, 0x00, 0x00)
-            run.font.strike = True
-        elif word.startswith('+ '):
-            run = p.add_run(word[2:] + ' ')
-            run.font.color.rgb = RGBColor(0x00, 0x80, 0x00)
-            run.font.underline = True
-        elif word.startswith('  '):
-            p.add_run(word[2:] + ' ')
-
-    doc.save(output_path)
 
 def main():
     st.title("📝 Document Copyediting Tool")
@@ -358,7 +541,6 @@ def main():
     st.sidebar.markdown("Add any additional editing instructions:")
     
     # Initialize custom_prompt in session state if not already present
-    # This ensures st.session_state.custom_prompt always exists when the text_area is created
     if "custom_prompt" not in st.session_state:
         st.session_state.custom_prompt = ""
 
@@ -376,20 +558,17 @@ def main():
     for i, example in enumerate(example_prompts):
         if st.sidebar.button(f"Use: {example[:30]}...", key=f"example_{i}"):
             st.session_state.custom_prompt = example
-            # st.experimental_rerun() is essential here to make the text_area update
             st.rerun() 
             
     # Define the text_area.
-    # IMPORTANT: DO NOT provide the 'value' parameter if you are using 'key' and managing via session_state
     custom_prompt = st.sidebar.text_area(
         "Additional Instructions",
         placeholder="e.g., 'Make the tone more formal', 'Convert to active voice', 'Simplify complex sentences', etc.",
         height=120,
-        key="custom_prompt", # Streamlit will automatically get/set its value from/to st.session_state.custom_prompt
+        key="custom_prompt", 
         help="Enter any specific instructions for editing that aren't covered by the standard rules above."
     )
     
-    # The rest of your main function remains the same
     col1, col2 = st.columns([1, 1])
     
     with col1:
@@ -404,9 +583,14 @@ def main():
             # Display file info
             st.success(f"✅ File uploaded: {uploaded_file.name}")
             st.info(f"File size: {len(uploaded_file.getvalue())} bytes")
-            # Process document
+            
+            # Store the uploaded file's initial position
+            uploaded_file.seek(0)
+            st.session_state.uploaded_file_bytes = uploaded_file.getvalue()
+            
+            # Process document (read as text)
             with st.spinner("Processing document..."):
-                original_text = process_document(uploaded_file)
+                original_text = process_document(uploaded_file) # This reads the content
                 
             if original_text:
                 st.subheader("📄 Original Text")
@@ -420,7 +604,6 @@ def main():
                 # Show selected editing options
                 st.subheader("🔧 Editing Configuration")
                 
-                # Show selected rules
                 any_rule_selected = any(
                     any(rules.values()) for rules in selected_rules.values()
                 )
@@ -435,7 +618,6 @@ def main():
                     st.write("*No style guide rules selected*")
                 
                 # Show custom instructions
-                # Now custom_prompt refers to the value from the text_area widget itself
                 if custom_prompt.strip(): 
                     st.write("**Custom Instructions:**")
                     st.write(f"• {custom_prompt}")
@@ -490,18 +672,19 @@ def main():
                         st.session_state.original_text_result, 
                         st.session_state.edited_text_result
                     )
-            st.download_button(
-                label="📊 Download Diff Report",
-                data=diff_content,
-                file_name=f"diff_{uploaded_file.name if uploaded_file else 'document'}.txt",
-                mime="text/plain"
-            )
-            
+                    st.download_button(
+                        label="📊 Download Diff Report",
+                        data=diff_content,
+                        file_name=f"diff_{uploaded_file.name if uploaded_file else 'document'}.txt",
+                        mime="text/plain"
+                    )
+        
             # New download button for docx with tracked changes
-            if hasattr(st.session_state, 'original_text_result') and hasattr(st.session_state, 'edited_text_result'):
-                # Generate docx in memory
+            if uploaded_file is not None and uploaded_file.type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
                 docx_buffer = io.BytesIO()
-                format_diff_to_docx(st.session_state.original_text_result, st.session_state.edited_text_result, docx_buffer)
+                # Use the stored file bytes to recreate a file-like object for docx.Document
+                original_docx_bytes_io = io.BytesIO(st.session_state.uploaded_file_bytes)
+                format_diff_to_docx(original_docx_bytes_io, st.session_state.edited_text_result, docx_buffer)
                 docx_buffer.seek(0)
                 st.download_button(
                     label="📄 Download Edited Document (DOCX with tracked changes)",
@@ -581,22 +764,6 @@ def main():
     5. **Review**: Compare the original and edited text using the different view options
     6. **Download**: Save the edited document or diff report
     """)
-    
-    # Error handling info
-    with st.expander("⚠️ Troubleshooting"):
-        st.markdown("""
-        **Common Issues:**
-        - **Unsupported file type**: Only TXT, DOCX, HTML, and Markdown files are supported
-        - **Large files**: Very large documents may take longer to process
-        - **API errors**: Check your LLMFOUNDRY_TOKEN environment variable
-        - **Processing failures**: Try with smaller text sections or different rule combinations
-        
-        **Tips for Custom Instructions:**
-        - Be specific about what changes you want
-        - You can combine multiple instructions (e.g., "Make it more formal and concise")
-        - Use examples when possible (e.g., "Change 'utilize' to 'use'")
-        - Consider your target audience when giving tone instructions
-        """)
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
